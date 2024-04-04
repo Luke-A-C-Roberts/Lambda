@@ -1,15 +1,27 @@
 -- Imports ----------------------------------------------------------------------------------------
 import Prelude hiding (lookup)
+import Control.Monad (forever)
 import Data.Maybe (isJust, fromMaybe)
 import Debug.Trace (trace)
 import Data.Typeable (typeOf)
 import Data.List (elemIndices, sortBy)
 import Data.Map (Map, fromList, lookup)
-import Data.Set (Set, difference, fromList, intersection, member, singleton, toList, unions)
+import Data.Set (Set, difference, fromList, intersection, member, null, singleton, toList, unions)
+import System.Environment (getArgs)
+import System.IO
 
 -- Utils ------------------------------------------------------------------------------------------
 red :: String -> String
 red string = "\x1b[31m" <> string <> "\x1b[0m"
+
+lred :: String -> String
+lred string = "\x1b[91m" <> string <> "\x1b[0m"
+
+lyellow :: String -> String
+lyellow string = "\x1b[93m" <> string <> "\x1b[0m"
+
+lcyan :: String -> String
+lcyan string = "\x1b[96m" <> string <> "\x1b[0m"
 
 
 validVariableChars :: [Char]
@@ -36,16 +48,23 @@ splitAtIndex index list
   | otherwise = Just (slice 0 index list, list !! index, slice (index + 1) (length list) list)
   
 
+infix 5 +:
+(+:) :: [a] -> a -> [a]
+l +: v = l ++ [v]
+
 -- Error Messages ---------------------------------------------------------------------------------
 badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
 
 
-bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applyBetaSplitFailure :: String
+bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applyBetaSplitFailure,
+  alphaOutOfSymbols, infinateRecursion :: String
 bracesMismatch1 = "Braces do not match (not all opened braces were closed)"
 bracesMismatch2 = "Braces do not match (there is a closed brace before an opened one)"
 impossibleFromMaybe = "This error is impossible because there is a isJust clause before fromMaybe"
 applyBetaSplitFailure = "`splitAtIndex` performed on branch or lambda stems failed"
+alphaOutOfSymbols = "all symbols were expended when trying to complete alpha conversion"
+infinateRecursion = "It is possible that the function being run is going on infinately"
 
 -- Lexer ------------------------------------------------------------------------------------------
 data Token =
@@ -76,7 +95,7 @@ braceReduce x token
 
 braceFoldl :: Int -> [Token] -> Int
 braceFoldl val tokens
-  | null tokens = val
+  | Prelude.null tokens = val
   | val < 0 = error $ red bracesMismatch1
   | otherwise =
     let token = head tokens in
@@ -139,9 +158,9 @@ under stack =
     let (maybe_next, new_stack) = pop popped_stack in
       if isJust maybe_next then
         let next = fromMaybe (error $ red impossibleFromMaybe) maybe_next in
-        push (Branch {stems = stems next ++ [node]}) new_stack
+        push (Branch {stems = stems next +: node}) new_stack
       else stack -- if there's nothing to push the top item under
-  else stack -- if the stack is empty
+  else stack -- if the stack is empty there's nothing to do
 
 
 treeStep :: Token -> Stack -> Stack
@@ -153,7 +172,7 @@ treeStep token stack
 
 makeTreeRecur :: [Token] -> Stack -> Stack
 makeTreeRecur tokens stack
-  | null tokens = stack
+  | Prelude.null tokens = stack
   | otherwise =
     let token = head tokens in
     let tokens_tail = tail tokens in
@@ -244,16 +263,17 @@ findApplicationContext :: Node -> Maybe Int
 findApplicationContext (Leaf _) = Nothing
 
 findApplicationContext (Branch stems)
-  | null searched_lambdas = Nothing -- branch nodes with no lambda expressions
+  | Prelude.null searched_lambdas = Nothing -- branch nodes with no lambda expressions
   | head searched_lambdas `atEnd` stems = Nothing -- if found lambda has no args
   | otherwise = Just $ head searched_lambdas
   where searched_lambdas = elemIndices True (map isLambda stems)
 
 findApplicationContext (Lambda _ definition)
-  | null searched_lambdas = Nothing -- branch nodes with no lambda expressions
+  | Prelude.null searched_lambdas = Nothing -- branch nodes with no lambda expressions
   | head searched_lambdas `atEnd` definition = Nothing -- if found lambda has no args
   | otherwise = Just $ head searched_lambdas
   where searched_lambdas = elemIndices True (map isLambda definition)
+
 
 data Reduction = Reduction {
   before :: ![Node],
@@ -262,6 +282,7 @@ data Reduction = Reduction {
   after  :: ![Node]
 }
 
+
 lambdaWithArg :: ([Node], Node, [Node]) -> Reduction
 lambdaWithArg (before, node, after) = Reduction{
   before,
@@ -269,6 +290,7 @@ lambdaWithArg (before, node, after) = Reduction{
   arg=head after,
   after = tail after
 }
+
 
 splitMaybePos :: Maybe Int -> [Node] -> Maybe ([Node], Node, [Node])
 splitMaybePos maybe_lambda_pos = 
@@ -280,12 +302,18 @@ splitMaybePos maybe_lambda_pos =
 alpha :: Map Token Token -> Node -> Node
 alpha tok_map (Leaf val)
   | isJust maybe_new_val = Leaf{val = fromMaybe (error $ red impossibleFromMaybe) maybe_new_val}
+  | otherwise = Leaf{val}
   where maybe_new_val = lookup val tok_map
 
 alpha tok_map (Branch stems) = Branch{stems = map (alpha tok_map) stems}
 
 alpha tok_map (Lambda symbol definition)
-  = Lambda{symbol, definition = map (alpha tok_map) definition}
+  | isJust maybe_new_symbol = Lambda {
+      symbol = fromMaybe (error $ red impossibleFromMaybe) maybe_new_symbol,
+      definition = map (alpha tok_map) definition
+    }
+  | otherwise = Lambda{symbol, definition = map (alpha tok_map) definition}
+  where maybe_new_symbol = lookup symbol tok_map
 
 
 -- gets all of the tokens from a node as candidate targets to be replaced
@@ -304,8 +332,11 @@ argTokens (Lambda symbol definition) = nodeTokens Lambda{symbol, definition}
 
 
 tokenMap :: Node -> Node -> Map Token Token
-tokenMap lambda args =
-  Data.Map.fromList $ zip (toList replacement_tokens) (sortBy token_comp (toList available_tokens))
+tokenMap lambda args
+  | Data.Set.null available_tokens = error $ red ""
+  | otherwise = Data.Map.fromList
+      $ zip (toList replacement_tokens) (sortBy token_comp (toList available_tokens))
+
   where lambda_tokens = nodeTokens lambda
         arg_tokens = argTokens args
         all_tokens = Data.Set.fromList $ map Letter validVariableChars
@@ -314,16 +345,83 @@ tokenMap lambda args =
         token_comp x y = compare (notateToken x) (notateToken y)
 
 
-applyAlpha :: Node -> Node
-applyAlpha (Leaf val) = Leaf{val}
+alphaConversionToBranch :: Reduction -> Node
+alphaConversionToBranch alpha_reduction = Branch {
+  stems =
+       before alpha_reduction
+    ++ [alpha (tokenMap (lambda alpha_reduction) (arg alpha_reduction)) (lambda alpha_reduction)]
+    ++ [arg alpha_reduction]
+    ++ after alpha_reduction
+}
 
--- TODO --
-applyAlpha (Branch stems)
-  | isJust maybe_lambda_pos = 
-    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
+
+alphaConversionToLambda :: Token -> Reduction -> Node
+alphaConversionToLambda symbol alpha_reduction = Lambda {
+  symbol,
+  definition =
+       before alpha_reduction
+    ++ [alpha (tokenMap (lambda alpha_reduction) (arg alpha_reduction)) (lambda alpha_reduction)]
+    ++ [arg alpha_reduction]
+    ++ after alpha_reduction
+}
+
+
+testForAlpha :: Node -> Node -> Bool
+testForAlpha lambda (Leaf val) =
+  not (Data.Set.null (nodeTokens lambda `intersection` argTokens Leaf{val}))
+  && symbol lambda /= val
+  
+testForAlpha lambda (Branch stems) =
+  not (Data.Set.null (nodeTokens lambda `intersection` argTokens Branch{stems})
+  || symbol lambda `member` argTokens Branch{stems})
+
+testForAlpha (Lambda symbol1 definition1) (Lambda symbol2 definition2) =
+  not (Data.Set.null (nodeTokens lambda1 `intersection` argTokens lambda2)
+  || symbol lambda1 `member` argTokens lambda2)
+  where lambda1 = Lambda{symbol = symbol1, definition = definition1}
+        lambda2 = Lambda{symbol = symbol2, definition = definition2}
+        
+
+shouldApplyAlpha :: Node -> Bool
+shouldApplyAlpha (Leaf _) = False
+
+shouldApplyAlpha (Branch stems)
+  | isJust maybe_lambda_pos =
+    let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos stems in
     let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
-    undefined -- Define a function to apply alpha rule to reduction and return branch node
+    testForAlpha (lambda alpha_reduction) (arg alpha_reduction)
+    
+  | otherwise = any shouldApplyAlpha stems
+  where maybe_lambda_pos = findApplicationContext Branch{stems}
+
+
+shouldApplyAlpha (Lambda symbol definition)
+  | isJust maybe_lambda_pos =
+    let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
+    let split = splitMaybePos maybe_lambda_pos definition in
+    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+    testForAlpha (lambda alpha_reduction) (arg alpha_reduction)
+    
+  | otherwise = any shouldApplyAlpha definition
+  where maybe_lambda_pos = findApplicationContext Lambda{symbol, definition}
+
+
+applyAlpha :: Node -> Node
+applyAlpha (Leaf val) = Leaf{val} -- applying alpha conversion to a free variable does nothing
+
+applyAlpha (Branch stems)
+  | isJust maybe_lambda_pos = 
+    let lambda_pos  = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
+    let split = splitMaybePos maybe_lambda_pos stems in
+    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+    
+    if testForAlpha (lambda alpha_reduction) (arg alpha_reduction) then
+      alphaConversionToBranch alpha_reduction
+    else
+      Branch{stems = map applyAlpha stems}
+
+  | otherwise = Branch{stems = map applyAlpha stems}
   where maybe_lambda_pos = findApplicationContext Branch{stems}
 
 applyAlpha (Lambda symbol definition)
@@ -331,10 +429,15 @@ applyAlpha (Lambda symbol definition)
     let context = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos definition in
     let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
-    undefined -- Define a function to apply alpha rule to reduction and return lambda node
+    
+    if testForAlpha (lambda alpha_reduction) (arg alpha_reduction) then
+      alphaConversionToBranch alpha_reduction
+    else
+      Lambda{symbol, definition = map applyAlpha definition}
+  
+  | otherwise = Lambda{symbol, definition = map applyAlpha definition}
   where maybe_lambda_pos = findApplicationContext Lambda{symbol, definition}
 
--- END TODO --
 
 -- Beta Reduction ---------------------------------------------------------------------------------
 -- given a lambda expression and a symbol, all matching symbols within the expression are replaced
@@ -361,6 +464,7 @@ betaRecur find replace (Branch stems) =
 betaRecur find replace (Lambda symbol definition) =
   Lambda {symbol, definition = map (betaRecur find replace) definition}
 
+
 betaReductionToBranch :: Reduction -> Node
 betaReductionToBranch beta_reduction = Branch{
   stems =
@@ -368,6 +472,7 @@ betaReductionToBranch beta_reduction = Branch{
     ++ [beta (lambda beta_reduction) (arg beta_reduction)]
     ++ after beta_reduction
 }
+
 
 betaReductionToLambda :: Token -> Reduction -> Node 
 betaReductionToLambda symbol beta_reduction = Lambda {
@@ -392,7 +497,7 @@ shouldApplyBeta (Lambda symbol definition)
 
 
 applyBeta :: Node -> Node
-applyBeta (Leaf val) = Leaf{val}
+applyBeta (Leaf val) = Leaf{val} -- applying beta reduction does nothing to a free varible
 
 applyBeta (Branch stems)
   | isJust maybe_lambda_pos =
@@ -412,11 +517,32 @@ applyBeta (Lambda symbol definition)
   | otherwise = Lambda{symbol, definition = map applyBeta definition}
   where maybe_lambda_pos = findApplicationContext Lambda {symbol, definition}
 
+-- Application ------------------------------------------------------------------------------------
+eval :: String -> String
+eval string = notation $ evalRecur 0 $ parse $ tokenise string
+
+evalRecur :: Int -> Node -> Node
+evalRecur iteration node
+  | trace ((lyellow $ show iteration) <> " " <> symbol <> " " <> notation node) False = undefined
+  where symbol | shouldApplyAlpha node = lred "α" | shouldApplyBeta node = lcyan "β" | otherwise = " "
+
+evalRecur iteration node
+  | iteration > 10 = error $ red infinateRecursion
+  | to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyAlpha node
+  | to_eval_beta = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
+  | otherwise = node
+  
+  where to_eval_alpha = shouldApplyAlpha node
+        to_eval_beta  = shouldApplyBeta node
+
+renotate :: String -> String
+renotate string = notation $ parse $ tokenise string
+
 -- Main -------------------------------------------------------------------------------------------
 main :: IO()
-main =
-
-  let expression = stems $ parse $ tokenise "(\\x.z)z" in
-  let lambda = expression !! 0 in
-  let arg = expression !! 1 in
-  putStrLn (show $ tokenMap lambda arg)
+main = do
+  hSetBuffering stdout NoBuffering
+  forever $ do
+    putStr ">> "
+    input <- getLine
+    putStrLn ((renotate input) <> "\n" <> (eval input)) 
