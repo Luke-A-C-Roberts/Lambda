@@ -2,8 +2,9 @@
 
 To run make sure you have the Glasgow Haskell Compiler `ghc` is installed. Once installed, navigate to the cloned folder and execute the build script with `./build`. Then run with `./lambda`.
 
+## Features
 This lambda interpreter supports:
-  - UTF-8 characters (both λ and ł work as the lambda sigil)
+  - UTF-8 characters (both `λ` and `ł` work as the lambda sigil)
   - nested (curried) lambda functions, eg. `λx.λy.xy`, which do not require braces on input.
   - free variables in lambda function, eg. `λx.xy`
   - beta reduction of single variables, eg. `(λx.x)y → y`
@@ -12,4 +13,5 @@ This lambda interpreter supports:
   - alpha conversion of single nested bound variables, eg. `(λf.(λx.f(fx)))x` → `(λf.(λa.f(fa)))x`
   - alpha conversion of multiple nested bound variables, eg. `(λa.(λb.(λc.abc)))(bc) → (λa.(λd.(λe.ade)))(bc)`
 
+## Demo
 ![demo](https://github.com/Luke-A-C-Roberts/Lambda/blob/master/demo.png?raw=true)
