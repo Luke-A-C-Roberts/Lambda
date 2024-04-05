@@ -15,3 +15,10 @@ This lambda interpreter supports:
 
 ## Demo
 ![demo](https://github.com/Luke-A-C-Roberts/Lambda/blob/master/demo.png?raw=true)
+
+## References
+for comparison: https://lambster.dev/
+
+details on specific reductions of lambda calculus: https://ligerlearn.com/what-is-the-lambda-%ce%bb-calculus/
+
+alpha conversion Alpha Conversion and Alpha Equivalence: https://home.ttic.edu/~pl/classes/CMSC336-Winter08/lectures/lec3.pdf
