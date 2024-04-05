@@ -7,7 +7,7 @@ import Data.Typeable (typeOf)
 import Data.List (elemIndices, sort)
 import Data.Map (Map, keys, lookup, fromList)
 import Data.Set (Set, difference, fromList, empty, intersection, member, null, singleton, toList,
-                 union, unions)
+  union, unions)
 
 import Control.Monad (forever)
 import Debug.Trace (trace)
