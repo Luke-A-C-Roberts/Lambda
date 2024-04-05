@@ -54,9 +54,6 @@ l +: v = l ++ [v]
 unionMap :: Ord b => (a -> Set b) -> [a] -> Set b
 unionMap func items = unions $ map func items
 
-inspect :: Show a => a -> a
-inspect val = val where _ = print val
-
 -- Error Messages ---------------------------------------------------------------------------------
 badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
@@ -417,7 +414,7 @@ alphaReductionToBranch reduction
   | isJust maybe_alpha_token_map = Branch {
     stems = before reduction
         ++ [
-          alpha (inspect $ fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
+          alpha (fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
           (lambda reduction),
           arg reduction
         ]
@@ -559,7 +556,7 @@ evalRecur iteration node
         space =  replicate (4 - floor (logBase 10 (fromIntegral iteration))) ' '
 
 evalRecur iteration node
-  | iteration > 10 = error $ red infinateRecursion
+  | iteration > 1000 = error $ red infinateRecursion
   | to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyAlpha node
   | to_eval_beta && not to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
   | otherwise = node
@@ -577,5 +574,4 @@ main = do
   forever $ do
     putStr ">> "
     input <- getLine
-    eval input 
-
+    eval input
