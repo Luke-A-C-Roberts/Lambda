@@ -11,4 +11,4 @@ This lambda interpreter supports:
   - beta reduction of multiple variables, eg. `(λx.x)(ab) → ab`
   - beta reduction of other lambdas, eg. `(λx.x)(λy.y) → (λy.y)`
 
-[demo](demo.png)
+![demo](https://github.com/Luke-C-A-Roberts/Lambda/blob/main/demo.png?raw=true)
