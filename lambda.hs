@@ -1,31 +1,31 @@
 -- Imports ----------------------------------------------------------------------------------------
 import Prelude hiding (lookup)
-import Control.Monad (forever)
+
 import Data.Maybe (isJust, fromMaybe)
-import Debug.Trace (trace)
 import Data.Typeable (typeOf)
-import Data.List (elemIndices, sortBy)
-import Data.Map (Map, fromList, lookup)
-import Data.Set (Set, difference, fromList, intersection, member, null, singleton, toList, unions)
+
+import Data.List (elemIndices, sort)
+import Data.Map (Map, keys, lookup, fromList)
+import Data.Set (Set, difference, fromList, empty, intersection, member, null, singleton, toList,
+                 union, unions)
+
+import Control.Monad (forever)
+import Debug.Trace (trace)
 import System.Environment (getArgs)
-import System.IO
+import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 
 -- Utils ------------------------------------------------------------------------------------------
-red :: String -> String
-red string = "\x1b[31m" <> string <> "\x1b[0m"
+color :: Int -> String -> String
+color val string = "\x1b[" <> show val <> "m" <> string <> "\x1b[0m"
 
-lred :: String -> String
-lred string = "\x1b[91m" <> string <> "\x1b[0m"
-
-lyellow :: String -> String
-lyellow string = "\x1b[93m" <> string <> "\x1b[0m"
-
-lcyan :: String -> String
-lcyan string = "\x1b[96m" <> string <> "\x1b[0m"
-
+red, lred, lyellow, lcyan :: String -> String
+red = color 31
+lred = color 91
+lyellow = color 93
+lcyan = color 96
 
 validVariableChars :: [Char]
-validVariableChars = ['a'..'z'] ++ ['a'..'z']
+validVariableChars = ['a'..'z']
 
 atEnd :: Int -> [a] -> Bool
 atEnd index list = index == length list - 1
@@ -46,23 +46,24 @@ splitAtIndex :: Int -> [a] -> Maybe ([a], a, [a])
 splitAtIndex index list
   | (index < 0) || (index >= length list) = Nothing
   | otherwise = Just (slice 0 index list, list !! index, slice (index + 1) (length list) list)
-  
 
 infix 5 +:
 (+:) :: [a] -> a -> [a]
 l +: v = l ++ [v]
 
+unionMap :: Ord b => (a -> Set b) -> [a] -> Set b
+unionMap func items = unions $ map func items
+
 -- Error Messages ---------------------------------------------------------------------------------
 badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
 
-
-bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applyBetaSplitFailure,
+bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applySplitFailure,
   alphaOutOfSymbols, infinateRecursion :: String
 bracesMismatch1 = "Braces do not match (not all opened braces were closed)"
 bracesMismatch2 = "Braces do not match (there is a closed brace before an opened one)"
 impossibleFromMaybe = "This error is impossible because there is a isJust clause before fromMaybe"
-applyBetaSplitFailure = "`splitAtIndex` performed on branch or lambda stems failed"
+applySplitFailure = "`splitAtIndex` performed on branch or lambda stems failed"
 alphaOutOfSymbols = "all symbols were expended when trying to complete alpha conversion"
 infinateRecursion = "It is possible that the function being run is going on infinately"
 
@@ -119,15 +120,28 @@ data Node =
   | Lambda {symbol :: !Token, definition :: ![Node]}
   deriving (Show)
 
-data Stack = Stack {nodes :: ![Node], size :: Int} deriving (Show)
+isLeaf :: Node -> Bool
+isLeaf (Leaf _) = True
+isLeaf _ = False 
+
+isBranch :: Node -> Bool
+isBranch (Branch _) = True
+isBranch _ = False
+
+isLambda :: Node -> Bool
+isLambda (Lambda _ _) = True
+isLambda _ = False
+
+
+data Stack = Stack {nodes :: ![Node], size :: !Int} deriving (Show)
 
 
 newStack :: [Node] -> Stack
 newStack nodes = Stack {nodes = nodes, size = length nodes}
 
 
-empty :: Stack -> Bool
-empty stack = size stack == 0
+nullStack :: Stack -> Bool
+nullStack stack = size stack == 0
 
 
 push :: Node -> Stack -> Stack
@@ -136,13 +150,13 @@ push node stack = Stack {nodes = node : nodes stack, size = size stack + 1}
 
 peak :: Stack -> Maybe Node
 peak stack
-  | empty stack = Nothing
+  | nullStack stack = Nothing
   | otherwise = Just $ head $ nodes stack
 
 
 pop :: Stack -> (Maybe Node, Stack)
 pop stack
-  | empty stack = (Nothing, stack)
+  | nullStack stack = (Nothing, stack)
   | otherwise =
     let stack_nodes = nodes stack in
     let stack_size = size stack in
@@ -178,18 +192,13 @@ makeTreeRecur tokens stack
     let tokens_tail = tail tokens in
     makeTreeRecur tokens_tail (treeStep token stack)
 
+
 -- makeTree algorithm takes into account brackets as tokens are converted to nodes and pushed onto
 -- a stack. If the bracket is open then a new node is pushed onto the stack. When the bracket is
 -- closed the node on top becomes a child node of the node underneath it on the stack. Other tokens
 -- are put underneath the top node immediately when consumed.
-
 makeTree :: [Token] -> Node
 makeTree tokens = head $ nodes $ makeTreeRecur tokens (newStack [Branch {stems = []}])
-
-
-isBranch :: Node -> Bool
-isBranch (Branch _) = True
-isBranch _ = False
 
 
 makeLambda :: [Node] -> [Node]
@@ -253,12 +262,7 @@ notationRecur i (Lambda symbol definition)
   where content = "λ" ++ notateToken symbol ++ "." ++ concatMap (notationRecur (i + 1)) definition
 
 -- Evaluation -------------------------------------------------------------------------------------
-isLambda :: Node -> Bool
-isLambda (Lambda _ _) = True
-isLambda _ = False
-
-
--- if sub contain [(...) Lambda Node (...)] then return it's position,
+-- if node contains [(...) Lambda Node (...)] then return it's position,
 findApplicationContext :: Node -> Maybe Int
 findApplicationContext (Leaf _) = Nothing
 
@@ -280,7 +284,7 @@ data Reduction = Reduction {
   lambda :: !Node,
   arg    :: !Node,
   after  :: ![Node]
-}
+} deriving (Show)
 
 
 lambdaWithArg :: ([Node], Node, [Node]) -> Reduction
@@ -297,169 +301,190 @@ splitMaybePos maybe_lambda_pos =
   splitAtIndex (fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos)
 
 -- Alpha Conversion -------------------------------------------------------------------------------
--- applies and alpha conversion where all tokens within a node are replaced so that there are no
--- name clashes when applying beta reduction
 alpha :: Map Token Token -> Node -> Node
-alpha tok_map (Leaf val)
-  | isJust maybe_new_val = Leaf{val = fromMaybe (error $ red impossibleFromMaybe) maybe_new_val}
+alpha token_map (Leaf val)
+  | val `elem` keys token_map
+    = Leaf{val = fromMaybe (error $ red impossibleFromMaybe) $ lookup val token_map}
   | otherwise = Leaf{val}
-  where maybe_new_val = lookup val tok_map
 
-alpha tok_map (Branch stems) = Branch{stems = map (alpha tok_map) stems}
+alpha token_map (Branch stems) = Branch{stems = map (alpha token_map) stems}
 
-alpha tok_map (Lambda symbol definition)
-  | isJust maybe_new_symbol = Lambda {
-      symbol = fromMaybe (error $ red impossibleFromMaybe) maybe_new_symbol,
-      definition = map (alpha tok_map) definition
+alpha token_map (Lambda symbol definition)
+  | symbol `elem` keys token_map
+    = Lambda{
+      symbol = fromMaybe (error $ red impossibleFromMaybe) $ lookup symbol token_map,
+      definition = map (alpha token_map) definition
     }
-  | otherwise = Lambda{symbol, definition = map (alpha tok_map) definition}
-  where maybe_new_symbol = lookup symbol tok_map
+  | otherwise = Lambda{symbol, definition = map (alpha token_map) definition}
+
+variables :: Node -> Set Token
+variables (Leaf val) = singleton val
+variables (Branch stems) = unions $ map variables stems
+variables (Lambda _ definition) = unions $ map variables definition
 
 
--- gets all of the tokens from a node as candidate targets to be replaced
-nodeTokens :: Node -> Set Token
-nodeTokens (Leaf val) = singleton val
-nodeTokens (Branch stems) = unions $ map nodeTokens stems
-nodeTokens (Lambda _ definition) = unions $ map nodeTokens definition
+boundVariables :: Node -> Set Token
+boundVariables (Leaf val) = empty
+boundVariables (Branch stems) = unionMap boundVariables stems
+boundVariables (Lambda symbol definition) =
+  singleton symbol `union` unionMap boundVariables definition
 
 
--- gets all the tokens from a node that applies to a lambda. if itself is a lambda all members must
--- be acconted for
-argTokens :: Node -> Set Token
-argTokens (Leaf val) = singleton val
-argTokens (Branch stems) = argTokens $ head stems
-argTokens (Lambda symbol definition) = nodeTokens Lambda{symbol, definition} 
+freeVariables :: Node -> Set Token
+freeVariables node = variables node `difference` boundVariables node
 
 
-tokenMap :: Node -> Node -> Map Token Token
-tokenMap lambda args
-  | Data.Set.null available_tokens = error $ red ""
-  | otherwise = Data.Map.fromList
-      $ zip (toList replacement_tokens) (sortBy token_comp (toList available_tokens))
-
-  where lambda_tokens = nodeTokens lambda
-        arg_tokens = argTokens args
-        all_tokens = Data.Set.fromList $ map Letter validVariableChars
-        replacement_tokens = lambda_tokens `intersection` arg_tokens
-        available_tokens = (all_tokens `difference` lambda_tokens) `difference` replacement_tokens
-        token_comp x y = compare (notateToken x) (notateToken y)
+validVariables :: Set Token -> Set Token -> Set Token
+validVariables target_tokens lambda_tokens = 
+  Data.Set.fromList (map Letter validVariableChars)
+  `difference` target_tokens
+  `difference` lambda_tokens
 
 
-alphaConversionToBranch :: Reduction -> Node
-alphaConversionToBranch alpha_reduction = Branch {
-  stems =
-       before alpha_reduction
-    ++ [alpha (tokenMap (lambda alpha_reduction) (arg alpha_reduction)) (lambda alpha_reduction)]
-    ++ [arg alpha_reduction]
-    ++ after alpha_reduction
-}
+-- given variables that need to be replaced and variables within a lambda that are forbidden from
+-- being used, return a map of targets and replacements 
+newVariables :: Int -> Set Token -> Set Token -> Map Token Token
+newVariables i target_tokens lambda_tokens = Data.Map.fromList $ take i
+  $ zip (sort $ toList target_tokens) (sort $ toList $ validVariables target_tokens lambda_tokens)
 
 
-alphaConversionToLambda :: Token -> Reduction -> Node
-alphaConversionToLambda symbol alpha_reduction = Lambda {
-  symbol,
-  definition =
-       before alpha_reduction
-    ++ [alpha (tokenMap (lambda alpha_reduction) (arg alpha_reduction)) (lambda alpha_reduction)]
-    ++ [arg alpha_reduction]
-    ++ after alpha_reduction
-}
-
-
-testForAlpha :: Node -> Node -> Bool
-testForAlpha lambda (Leaf val) =
-  not (Data.Set.null (nodeTokens lambda `intersection` argTokens Leaf{val}))
-  && symbol lambda /= val
-  
-testForAlpha lambda (Branch stems) =
-  not (Data.Set.null (nodeTokens lambda `intersection` argTokens Branch{stems})
-  || symbol lambda `member` argTokens Branch{stems})
-
-testForAlpha (Lambda symbol1 definition1) (Lambda symbol2 definition2) =
-  not (Data.Set.null (nodeTokens lambda1 `intersection` argTokens lambda2)
-  || symbol lambda1 `member` argTokens lambda2)
-  where lambda1 = Lambda{symbol = symbol1, definition = definition1}
-        lambda2 = Lambda{symbol = symbol2, definition = definition2}
-        
-
+-- Finds if there is at least one position in the tree that contains an application context. of it
+-- does then determine if the lambda and argument at that position should undergo alpha conversion
 shouldApplyAlpha :: Node -> Bool
-shouldApplyAlpha (Leaf _) = False
+shouldApplyAlpha (Leaf val) = False
 
 shouldApplyAlpha (Branch stems)
-  | isJust maybe_lambda_pos =
-    let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
-    let split = splitMaybePos maybe_lambda_pos stems in
-    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
-    testForAlpha (lambda alpha_reduction) (arg alpha_reduction)
-    
-  | otherwise = any shouldApplyAlpha stems
-  where maybe_lambda_pos = findApplicationContext Branch{stems}
-
+  | isJust maybe_context =
+    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_context in
+    let lambda = stems !! context in
+    let arg = stems !! (context + 1) in
+    shouldApplyAlphaInner lambda arg
+  | otherwise = False
+  where maybe_context = findApplicationContext Branch{stems}
 
 shouldApplyAlpha (Lambda symbol definition)
-  | isJust maybe_lambda_pos =
-    let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
-    let split = splitMaybePos maybe_lambda_pos definition in
-    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
-    testForAlpha (lambda alpha_reduction) (arg alpha_reduction)
-    
-  | otherwise = any shouldApplyAlpha definition
-  where maybe_lambda_pos = findApplicationContext Lambda{symbol, definition}
+  | isJust maybe_context =
+    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_context in
+    let lambda = definition !! context in
+    let arg = definition !! (context + 1) in
+    shouldApplyAlphaInner lambda arg
+  | otherwise = False
+  where maybe_context = findApplicationContext Lambda{symbol, definition}
+
+filterLeaves :: [Node] -> [Node]
+filterLeaves = filter isLeaf
+
+-- determines if a lambda and an argument should undergo alpha conversion. It occurs if one or more
+-- arguments are the same as any bound variables within a nested function. The outer function
+-- doesn't need to be searched since it will get replaced in beta reduction in the next step.
+shouldApplyAlphaInner :: Node -> Node -> Bool
+shouldApplyAlphaInner (Lambda symbol definition) (Leaf val)
+  = val `member` boundVariables Branch{stems = definition}
+
+shouldApplyAlphaInner (Lambda symbol definition) (Branch stems) =
+  Data.Set.null (arg_variables `intersection` bound_variables `difference` singleton symbol)
+  where bound_variables = boundVariables Lambda {symbol = symbol, definition = definition}
+        arg_variables = Data.Set.fromList (map val $ filterLeaves stems) 
+
+shouldApplyAlphaInner (Lambda _ _) (Lambda _ _) = False
+
+
+alphaTokenMap :: Node -> Node -> Maybe (Map Token Token)
+alphaTokenMap (Lambda symbol definition) (Leaf val)
+  | val `member` bound_variables = Just $ newVariables 1 (singleton val) varaibles
+  | otherwise = Nothing
+  where bound_variables = boundVariables Branch{stems = definition}
+        varaibles = variables Branch{stems = definition}
+
+alphaTokenMap (Lambda symbol definition) (Branch stems)
+  | Data.Set.null substitution_variables =
+    Just $ newVariables (length substitution_variables) substitution_variables all_variables
+  | otherwise = Nothing
+  where arg_variables = Data.Set.fromList $ map val $ filterLeaves stems
+        bound_variables = boundVariables Branch{stems = definition}
+        all_variables = variables Branch{stems = definition}
+        substitution_variables = arg_variables `intersection` bound_variables
+
+alphaTokenMap (Lambda _ _) (Lambda _ _) = Nothing
+
+
+alphaReductionToBranch :: Reduction -> Node
+alphaReductionToBranch reduction 
+  | isJust maybe_alpha_token_map = Branch {
+    stems = before reduction
+        ++ [
+          alpha (fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
+          (lambda reduction),
+          arg reduction
+        ]
+        ++ after reduction
+  }
+  | otherwise = Branch {
+    stems = before reduction
+      ++ [lambda reduction, arg reduction]
+      ++ after reduction
+  }
+  where maybe_alpha_token_map = alphaTokenMap (lambda reduction) (arg reduction)
+
+alphaReductionToLambda :: Token -> Reduction -> Node
+alphaReductionToLambda symbol reduction 
+  | isJust maybe_alpha_token_map = Lambda {
+    symbol,
+    definition = before reduction
+      ++ [
+        alpha (fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
+        (lambda reduction),
+        arg reduction
+      ]
+      ++ after reduction
+  }
+  | otherwise = Lambda {
+    symbol,
+    definition = before reduction
+      ++ [lambda reduction, arg reduction]
+      ++ after reduction
+  }
+  where maybe_alpha_token_map = alphaTokenMap (lambda reduction) (arg reduction)
 
 
 applyAlpha :: Node -> Node
-applyAlpha (Leaf val) = Leaf{val} -- applying alpha conversion to a free variable does nothing
+applyAlpha (Leaf val) = Leaf{val}
 
 applyAlpha (Branch stems)
-  | isJust maybe_lambda_pos = 
-    let lambda_pos  = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
-    let split = splitMaybePos maybe_lambda_pos stems in
-    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+  | isJust maybe_context =
+    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_context in
+    let split = splitMaybePos maybe_context stems in
+    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
+    alphaReductionToBranch alpha_reduction
     
-    if testForAlpha (lambda alpha_reduction) (arg alpha_reduction) then
-      alphaConversionToBranch alpha_reduction
-    else
-      Branch{stems = map applyAlpha stems}
-
   | otherwise = Branch{stems = map applyAlpha stems}
-  where maybe_lambda_pos = findApplicationContext Branch{stems}
+  where maybe_context = findApplicationContext Branch{stems}
 
 applyAlpha (Lambda symbol definition)
-  | isJust maybe_lambda_pos = 
-    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
-    let split = splitMaybePos maybe_lambda_pos definition in
-    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+  | isJust maybe_context =
+    let context = fromMaybe (error $ red impossibleFromMaybe) maybe_context in
+    let split = splitMaybePos maybe_context definition in
+    let alpha_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
+    alphaReductionToBranch alpha_reduction
     
-    if testForAlpha (lambda alpha_reduction) (arg alpha_reduction) then
-      alphaConversionToBranch alpha_reduction
-    else
-      Lambda{symbol, definition = map applyAlpha definition}
-  
   | otherwise = Lambda{symbol, definition = map applyAlpha definition}
-  where maybe_lambda_pos = findApplicationContext Lambda{symbol, definition}
-
+  where maybe_context = findApplicationContext Lambda{symbol, definition}
 
 -- Beta Reduction ---------------------------------------------------------------------------------
 -- given a lambda expression and a symbol, all matching symbols within the expression are replaced
 -- with that value. beta _ (Branch stems) supports currying by evaluating the first node of a
 -- branch node if there exist multiple stems in the branch
 beta :: Node -> Node -> Node
-beta (Lambda symbol definition) (Branch stems)
-  | length stems == 1 = beta Lambda{symbol, definition} (head stems)
-  | otherwise = Branch{stems = beta Lambda{symbol, definition} (head stems) : tail stems}
-
 beta (Lambda symbol definition) replace
   | length new_stems == 1 = head new_stems
   | otherwise = Branch{stems = new_stems} 
   where new_stems = map (betaRecur symbol replace) definition
 
-
 betaRecur :: Token -> Node -> Node -> Node
 betaRecur find replace (Leaf val) = if val == find then replace else Leaf {val}
 
 betaRecur find replace (Branch stems) =
-  if length new_stems == 1 then head new_stems else Branch{stems = new_stems} 
-  where new_stems = map (betaRecur find replace) stems
+  Branch {stems = map (betaRecur find replace) stems}
 
 betaRecur find replace (Lambda symbol definition) =
   Lambda {symbol, definition = map (betaRecur find replace) definition}
@@ -503,7 +528,7 @@ applyBeta (Branch stems)
   | isJust maybe_lambda_pos =
     let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos stems in
-    let beta_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+    let beta_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
     betaReductionToBranch beta_reduction
   | otherwise = Branch{stems=map applyBeta stems}
   where maybe_lambda_pos = findApplicationContext Branch{stems}
@@ -512,24 +537,27 @@ applyBeta (Lambda symbol definition)
   | isJust maybe_lambda_pos =
     let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos definition in
-    let beta_reduction = lambdaWithArg (fromMaybe (error $ red applyBetaSplitFailure) split) in
+    let beta_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
     betaReductionToLambda symbol beta_reduction
   | otherwise = Lambda{symbol, definition = map applyBeta definition}
   where maybe_lambda_pos = findApplicationContext Lambda {symbol, definition}
 
 -- Application ------------------------------------------------------------------------------------
-eval :: String -> String
-eval string = notation $ evalRecur 0 $ parse $ tokenise string
+eval :: String -> IO()
+eval string = putStrLn $ notation $ evalRecur 0 $ parse $ tokenise string
 
 evalRecur :: Int -> Node -> Node
 evalRecur iteration node
-  | trace ((lyellow $ show iteration) <> " " <> symbol <> " " <> notation node) False = undefined
-  where symbol | shouldApplyAlpha node = lred "α" | shouldApplyBeta node = lcyan "β" | otherwise = " "
+  | trace (lyellow (show iteration) <> space <> symbol <> " " <> notation node) False = undefined
+  where symbol | shouldApplyAlpha node = lred "α"
+               | shouldApplyBeta node = lcyan "β"
+               | otherwise = " "
+        space =  replicate (4 - floor (logBase 10 (fromIntegral iteration))) ' '
 
 evalRecur iteration node
-  | iteration > 10 = error $ red infinateRecursion
+  | iteration > 1000 = error $ red infinateRecursion
   | to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyAlpha node
-  | to_eval_beta = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
+  | to_eval_beta && not to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
   | otherwise = node
   
   where to_eval_alpha = shouldApplyAlpha node
@@ -545,4 +573,4 @@ main = do
   forever $ do
     putStr ">> "
     input <- getLine
-    putStrLn ((renotate input) <> "\n" <> (eval input)) 
+    eval input 
