@@ -54,6 +54,9 @@ l +: v = l ++ [v]
 unionMap :: Ord b => (a -> Set b) -> [a] -> Set b
 unionMap func items = unions $ map func items
 
+inspect :: Show a => a -> a
+inspect val = val where _ = print val
+
 -- Error Messages ---------------------------------------------------------------------------------
 badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
@@ -382,14 +385,15 @@ shouldApplyAlphaInner (Lambda symbol definition) (Leaf val)
   = val `member` boundVariables Branch{stems = definition}
 
 shouldApplyAlphaInner (Lambda symbol definition) (Branch stems) =
-  Data.Set.null (arg_variables `intersection` bound_variables `difference` singleton symbol)
-  where bound_variables = boundVariables Lambda {symbol = symbol, definition = definition}
+  not $ Data.Set.null (arg_variables `intersection` bound_variables)
+  where symbol_set = singleton symbol
         arg_variables = Data.Set.fromList (map val $ filterLeaves stems) 
+        bound_variables =
+          boundVariables Lambda {symbol = symbol, definition = definition} `difference` symbol_set
 
 shouldApplyAlphaInner (Lambda _ _) (Lambda _ _) = False
 
 
-alphaTokenMap :: Node -> Node -> Maybe (Map Token Token)
 alphaTokenMap (Lambda symbol definition) (Leaf val)
   | val `member` bound_variables = Just $ newVariables 1 (singleton val) varaibles
   | otherwise = Nothing
@@ -397,7 +401,7 @@ alphaTokenMap (Lambda symbol definition) (Leaf val)
         varaibles = variables Branch{stems = definition}
 
 alphaTokenMap (Lambda symbol definition) (Branch stems)
-  | Data.Set.null substitution_variables =
+  | not $ Data.Set.null substitution_variables =
     Just $ newVariables (length substitution_variables) substitution_variables all_variables
   | otherwise = Nothing
   where arg_variables = Data.Set.fromList $ map val $ filterLeaves stems
@@ -413,7 +417,7 @@ alphaReductionToBranch reduction
   | isJust maybe_alpha_token_map = Branch {
     stems = before reduction
         ++ [
-          alpha (fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
+          alpha (inspect $ fromMaybe (error $ red impossibleFromMaybe) maybe_alpha_token_map)
           (lambda reduction),
           arg reduction
         ]
@@ -555,7 +559,7 @@ evalRecur iteration node
         space =  replicate (4 - floor (logBase 10 (fromIntegral iteration))) ' '
 
 evalRecur iteration node
-  | iteration > 1000 = error $ red infinateRecursion
+  | iteration > 10 = error $ red infinateRecursion
   | to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyAlpha node
   | to_eval_beta && not to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
   | otherwise = node
@@ -574,3 +578,4 @@ main = do
     putStr ">> "
     input <- getLine
     eval input 
+
