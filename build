@@ -6,5 +6,7 @@ then
   exit 1
 else
   ghc ./lambda.hs
+  rm ./lambda.o
+  rm ./lambda.hi
 fi
 
