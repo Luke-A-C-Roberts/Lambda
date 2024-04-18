@@ -5,6 +5,8 @@ then
   echo "Please install ghc from https://www.haskell.org/ghc/download.html, and then re-run this command."
   exit 1
 else
-  ghc ./lambda.hs
+  ghc -O3 ./lambda.hs
+  rm lambda.hi lambda.o
+  exit 0
 fi
 
