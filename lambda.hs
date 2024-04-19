@@ -63,12 +63,12 @@ badTokenMessage char = "Invalid Token: " <> [char]
 
 bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applySplitFailure, alphaOutOfSymbols,
   infinateRecursion :: String
-bracesMismatch1 = "Braces do not match (not all opened braces were closed)"
-bracesMismatch2 = "Braces do not match (there is a closed brace before an opened one)"
+bracesMismatch1     = "Braces do not match (not all opened braces were closed)"
+bracesMismatch2     = "Braces do not match (there is a closed brace before an opened one)"
 impossibleFromMaybe = "This error is impossible because there is a isJust clause before fromMaybe"
-applySplitFailure = "`splitAtIndex` performed on branch or lambda stems failed"
-alphaOutOfSymbols = "all symbols were expended when trying to complete alpha conversion"
-infinateRecursion = "It is possible that the function being run is going on infinately"
+applySplitFailure   = "`splitAtIndex` performed on branch or lambda stems failed"
+alphaOutOfSymbols   = "all symbols were expended when trying to complete alpha conversion"
+infinateRecursion   = "It is possible that the function being run is going on infinately"
 
 invalidArg :: String -> String
 invalidArg arg = "Invalid argument " <> arg <> ". use -h for help message" 
@@ -260,14 +260,14 @@ simplifyTree (Branch stems)
   | otherwise = Branch {stems = map simplifyTree stems} 
 
 
-normaliseTree :: Node -> Node
-normaliseTree = simplifyTree . makeLeftAssociative
+regulariseTree :: Node -> Node
+regulariseTree = simplifyTree . makeLeftAssociative
 
 
 -- the main parse function that takes tokens, parses them into trees, forms lambda nodes and then
 -- simplifies any unnecessary node nesting
 parse :: [Token] -> Node
-parse tokens = normaliseTree $ makeTreeLambdas $ makeTree tokens
+parse tokens = regulariseTree $ makeTreeLambdas $ makeTree tokens
 
 -- Visualisation ----------------------------------------------------------------------------------
 notateToken :: Token -> String
@@ -313,7 +313,6 @@ showAST depth (Branch stems) = start <> end
 showAST depth (Lambda symbol definition) = start <> end
   where start = replicate depth ' ' <> "+ λ" <> notateToken symbol +: '\n'
         end   = foldl (<>) "" (map (showAST (depth + 1)) definition)
-
 
 
 -- Evaluation -------------------------------------------------------------------------------------
@@ -415,7 +414,7 @@ shouldApplyAlpha (Branch stems)
     let lambda = stems !! context in
     let arg = stems !! (context + 1) in
     shouldApplyAlphaInner lambda arg
-  | otherwise = False
+  | otherwise = any shouldApplyAlpha stems
   where maybe_context = findApplicationContext Branch{stems}
 
 shouldApplyAlpha (Lambda symbol definition)
@@ -424,7 +423,7 @@ shouldApplyAlpha (Lambda symbol definition)
     let lambda = definition !! context in
     let arg = definition !! (context + 1) in
     shouldApplyAlphaInner lambda arg
-  | otherwise = False
+  | otherwise = any shouldApplyAlpha definition
   where maybe_context = findApplicationContext Lambda{symbol, definition}
 
 filterLeaves :: [Node] -> [Node]
@@ -633,7 +632,7 @@ evalRecur AST iteration node
 evalRecur trace_type iteration node
   | iteration > 1000 = error $ red infinateRecursion
   | to_eval_alpha = newEvalRecur $ applyAlpha node
-  | to_eval_beta && not to_eval_alpha = newEvalRecur $ normaliseTree $ applyBeta node
+  | to_eval_beta && not to_eval_alpha = newEvalRecur $ regulariseTree $ applyBeta node
   | otherwise = node
   where newEvalRecur = evalRecur trace_type (iteration + 1) 
         to_eval_alpha = shouldApplyAlpha node
