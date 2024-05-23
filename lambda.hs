@@ -1,20 +1,24 @@
 -- Imports ----------------------------------------------------------------------------------------
+
 import Prelude hiding (lookup)
 
 import Data.Maybe (isJust, fromMaybe)
 import Data.Typeable (typeOf)
+import Data.Function (on)
 
-import Data.List (elemIndices, sort)
+import Data.List (elemIndices, sort, findIndices, intersperse, groupBy)
 import Data.Map (Map, keys, lookup, fromList)
 import Data.Set (Set, difference, fromList, empty, intersection, member, null, singleton, toList,
   union, unions)
 
 import Control.Monad (forever)
+import Control.Exception (SomeException, catch)
 import Debug.Trace (trace)
 import System.Environment (getArgs)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 
 -- Utils ------------------------------------------------------------------------------------------
+
 color :: Int -> String -> String
 color val string = "\x1b[" <> show val <> "m" <> string <> "\x1b[0m"
 
@@ -24,8 +28,11 @@ lred = color 91
 lyellow = color 93
 lcyan = color 96
 
-validVariableChars :: [Char]
+
+validVariableChars, validLambdaChars :: [Char]
 validVariableChars = ['a'..'z']
+validLambdaChars = ['λ', '\\', 'ł']
+
 
 atEnd :: Int -> [a] -> Bool
 atEnd index list = index == length list - 1
@@ -39,59 +46,101 @@ enumerate = zip count
 denumerate :: [(Int, a)] -> [a]
 denumerate = map snd
 
-slice :: Int -> Int -> [a] -> [a]
-slice start stop list = denumerate $ filter (\(i, _) -> (start <= i) && (i < stop)) (enumerate list)
 
+slice :: Int -> Int -> [a] -> [a]
+slice start stop list =
+  denumerate $ filter (\(i, _) -> (start <= i) && (i < stop)) (enumerate list)
+
+-- given index n, before (0..n), item (n), after (n+1..)
 splitAtIndex :: Int -> [a] -> Maybe ([a], a, [a])
 splitAtIndex index list
   | (index < 0) || (index >= length list) = Nothing
   | otherwise = Just (slice 0 index list, list !! index, slice (index + 1) (length list) list)
 
+
 infix 5 +:
 (+:) :: [a] -> a -> [a]
 l +: v = l ++ [v]
 
+-- given a list of type a, map a function producing sets and then union all of the sets
 unionMap :: Ord b => (a -> Set b) -> [a] -> Set b
 unionMap func items = unions $ map func items
 
 -- Error Messages ---------------------------------------------------------------------------------
+
 badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
 
-bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applySplitFailure,
-  alphaOutOfSymbols, infinateRecursion :: String
-bracesMismatch1 = "Braces do not match (not all opened braces were closed)"
-bracesMismatch2 = "Braces do not match (there is a closed brace before an opened one)"
+bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applySplitFailure, alphaOutOfSymbols,
+  infinateRecursion :: String
+bracesMismatch1     = "Braces do not match (not all opened braces were closed)"
+bracesMismatch2     = "Braces do not match (there is a closed brace before an opened one)"
 impossibleFromMaybe = "This error is impossible because there is a isJust clause before fromMaybe"
-applySplitFailure = "`splitAtIndex` performed on branch or lambda stems failed"
-alphaOutOfSymbols = "all symbols were expended when trying to complete alpha conversion"
-infinateRecursion = "It is possible that the function being run is going on infinately"
+applySplitFailure   = "`splitAtIndex` performed on branch or lambda stems failed"
+alphaOutOfSymbols   = "all symbols were expended when trying to complete alpha conversion"
+infinateRecursion   = "It is possible that the function being run is going on infinately"
 
--- Lexer ------------------------------------------------------------------------------------------
+invalidArg :: String -> String
+invalidArg arg = "Invalid argument " <> arg <> ". use -h for help message" 
+
+-- Preprocessor -----------------------------------------------------------------------------------
+
+keepTogetherLambdaHeads :: String -> [String]
+keepTogetherLambdaHeads = groupBy ((&&) `on` (`elem` validChars))
+  where validChars = validLambdaChars ++ validVariableChars
+
+
+desugarParamList :: String -> String
+desugarParamList string =
+  if   length string > 1 && head string `elem` validLambdaChars
+  then 'λ' : joinStrings (intersperse ".λ" $ map (:[]) $ tail string)
+  else string
+
+
+joinStrings :: [String] -> String
+joinStrings = foldl (<>) ""
+
+preprocessInput :: String -> String
+preprocessInput = joinStrings . map desugarParamList . keepTogetherLambdaHeads
+
+-- Tokeniser --------------------------------------------------------------------------------------
+
+-- tokens represent certain characters from the input that will later be parsed
 data Token =
     Sign
   | Dot
   | LBrace
   | RBrace
+  | EmptyToken
   | Letter !Char
   deriving (Eq, Show, Ord)
 
 
 token :: Char -> Token
 token char
-  | char `elem` ['λ', '\\', 'ł'] = Sign
+  | char `elem` validLambdaChars = Sign
   | char == '.' = Dot
   | char `elem` ['(', '['] = LBrace
   | char `elem` [')', ']'] = RBrace
   | char `elem` validVariableChars = Letter char
+  | char `elem` [' ', '\t'] = EmptyToken
   | otherwise = error $ red $ badTokenMessage char
 
 
+isEmptyToken :: Token -> Bool
+isEmptyToken EmptyToken = True
+isEmptyToken _ = False
+
+filterNonEmpty :: [Token] -> [Token]
+filterNonEmpty = filter (not . isEmptyToken)
+
+
+-- keeps track of how many braces are opened and closed
 braceReduce :: Int -> Token -> Int
-braceReduce x token
-  | token == LBrace = x + 1
-  | token == RBrace = x - 1
-  | otherwise = x
+braceReduce nestedness token
+  | token == LBrace = nestedness + 1
+  | token == RBrace = nestedness - 1
+  | otherwise = nestedness
 
 
 braceFoldl :: Int -> [Token] -> Int
@@ -111,13 +160,14 @@ checkMatchingBraces tokens
 
 
 tokenise :: String -> [Token]
-tokenise string = checkMatchingBraces $ map token string
+tokenise string = checkMatchingBraces $ filterNonEmpty $ map token string
 
 -- Parser -----------------------------------------------------------------------------------------
+
 data Node =
-    Leaf {val :: !Token}
-  | Branch {stems :: ![Node]}
-  | Lambda {symbol :: !Token, definition :: ![Node]}
+    Leaf {val :: !Token} -- leaf nodes are variables in definitions and as arguments
+  | Branch {stems :: ![Node]} -- branches contain more nodes
+  | Lambda {symbol :: !Token, definition :: ![Node]} -- lambdas have one parameter and a definition
   deriving (Show)
 
 isLeaf :: Node -> Bool
@@ -133,26 +183,22 @@ isLambda (Lambda _ _) = True
 isLambda _ = False
 
 
+-- stack structure for correctly nesting tree baced on braces
 data Stack = Stack {nodes :: ![Node], size :: !Int} deriving (Show)
-
 
 newStack :: [Node] -> Stack
 newStack nodes = Stack {nodes = nodes, size = length nodes}
 
-
 nullStack :: Stack -> Bool
 nullStack stack = size stack == 0
 
-
 push :: Node -> Stack -> Stack
 push node stack = Stack {nodes = node : nodes stack, size = size stack + 1}
-
 
 peak :: Stack -> Maybe Node
 peak stack
   | nullStack stack = Nothing
   | otherwise = Just $ head $ nodes stack
-
 
 pop :: Stack -> (Maybe Node, Stack)
 pop stack
@@ -161,7 +207,6 @@ pop stack
     let stack_nodes = nodes stack in
     let stack_size = size stack in
     (Just $ head stack_nodes, Stack {nodes = tail stack_nodes, size = stack_size - 1})
-
 
 -- `under` takes whatever is on top of the stack and makes it a child node of the one underneath
 under :: Stack -> Stack
@@ -177,6 +222,8 @@ under stack =
   else stack -- if the stack is empty there's nothing to do
 
 
+-- if the token is a left brace then add ontop, if its a right brace push it under the current node
+-- if it is anything else then imediately push it under the node ontop
 treeStep :: Token -> Stack -> Stack
 treeStep token stack
   | token == LBrace = push Branch {stems = []} stack
@@ -184,6 +231,8 @@ treeStep token stack
   | otherwise = under $ push Leaf {val = token} stack
 
 
+-- recursively build the tree using the list of tokens placed onto the stack. consume a token every
+-- recursion until the token list is exausted.
 makeTreeRecur :: [Token] -> Stack -> Stack
 makeTreeRecur tokens stack
   | Prelude.null tokens = stack
@@ -193,10 +242,6 @@ makeTreeRecur tokens stack
     makeTreeRecur tokens_tail (treeStep token stack)
 
 
--- makeTree algorithm takes into account brackets as tokens are converted to nodes and pushed onto
--- a stack. If the bracket is open then a new node is pushed onto the stack. When the bracket is
--- closed the node on top becomes a child node of the node underneath it on the stack. Other tokens
--- are put underneath the top node immediately when consumed.
 makeTree :: [Token] -> Node
 makeTree tokens = head $ nodes $ makeTreeRecur tokens (newStack [Branch {stems = []}])
 
@@ -209,6 +254,8 @@ makeLambda nodes
   | otherwise = nodes
 
 
+-- recusively DFS the node tree. if there is a branch or definition in the form λ[a-z]\.[a-z]+ then
+-- convert to a lambda node.
 makeTreeLambdas :: Node -> Node
 makeTreeLambdas (Leaf val) = Leaf {val}
 makeTreeLambdas (Branch stems) = Branch {stems = map makeTreeLambdas (makeLambda stems)}
@@ -216,6 +263,27 @@ makeTreeLambdas (Lambda symbol definition) =
   Lambda {symbol, definition = map makeTreeLambdas (makeLambda definition)}
 
 
+-- inforces left associtivity i.e. abc -> (ab)c
+makeLeftAssociative :: Node -> Node
+makeLeftAssociative (Leaf val) = Leaf{val}
+
+makeLeftAssociative (Branch stems)
+  | length stems < 3 = Branch{stems = map makeLeftAssociative stems}
+  | otherwise = Branch{stems = [
+      makeLeftAssociative $ Branch{stems = init stems},
+      makeLeftAssociative $ last stems
+    ]}
+
+makeLeftAssociative (Lambda symbol definition)
+  | length definition < 3 = Lambda{symbol, definition = map makeLeftAssociative definition}
+  | otherwise = Lambda{symbol, definition = [
+      makeLeftAssociative $ Branch{stems = init definition},
+      makeLeftAssociative $ last definition
+    ]}
+
+
+-- make lambda and make tree can cause unnecessary branch node nesting so simplifyTree recursively
+-- DFS traverses the tree and retracts the unnecessary single item branch nodes.
 simplifyTree :: Node -> Node
 simplifyTree (Leaf val) = Leaf {val}
 simplifyTree (Lambda symbol definition) = Lambda {symbol, definition = map simplifyTree definition}
@@ -224,17 +292,22 @@ simplifyTree (Branch stems)
   | otherwise = Branch {stems = map simplifyTree stems} 
 
 
+regulariseTree :: Node -> Node
+regulariseTree = simplifyTree . makeLeftAssociative
+
+
 -- the main parse function that takes tokens, parses them into trees, forms lambda nodes and then
 -- simplifies any unnecessary node nesting
 parse :: [Token] -> Node
-parse tokens = simplifyTree $ makeTreeLambdas $ makeTree tokens
+parse tokens = regulariseTree $ makeTreeLambdas $ makeTree tokens
 
 -- Visualisation ----------------------------------------------------------------------------------
+
 notateToken :: Token -> String
 notateToken (Letter c) = c:""
 notateToken token
-  | token == Sign = "λ"
-  | token == Dot = "."
+  | token == Sign   = "λ"
+  | token == Dot    = "."
   | token == LBrace = "("
   | token == RBrace = ")"
 
@@ -245,23 +318,37 @@ braceWrap string = "(" ++ string ++ ")"
 
 -- converts an AST back to string for visualisation
 notation :: Node -> String
-notation = notationRecur 0
+notation = notationRecur 0 0
 
 
-notationRecur :: Int -> Node -> String
-notationRecur _ (Leaf val) = notateToken val
+notationRecur :: Int -> Int -> Node -> String
+notationRecur _ _ (Leaf val) = notateToken val
 
-notationRecur i (Branch stems)
-  | i == 0 = content
+notationRecur depth pos (Branch stems)
+  | depth == 0 || pos == 0 = content -- if pos is zero then there it is in the form (ab)c -> "abc"
   | otherwise = braceWrap content
-  where content = concatMap (notationRecur (i + 1)) stems
+  where content = concatMap (uncurry $ notationRecur (depth + 1)) (enumerate stems)
 
-notationRecur i (Lambda symbol definition)
-  | i == 0 = content
+notationRecur depth _ (Lambda symbol definition)
+  | depth == 0 = content
   | otherwise = braceWrap content
-  where content = "λ" ++ notateToken symbol ++ "." ++ concatMap (notationRecur (i + 1)) definition
+  where content = "λ" ++ notateToken symbol ++ "."
+                  ++ concatMap (uncurry $ notationRecur (depth + 1)) (enumerate definition)
+
+
+showAST :: Int -> Node -> String
+showAST depth (Leaf val) = replicate depth ' ' <> "+ " <> notateToken val +: '\n'
+
+showAST depth (Branch stems) = start <> end
+  where start = replicate depth ' ' <> "+ ()" +: '\n'
+        end   = foldl (<>) "" (map (showAST (depth + 1)) stems)
+
+showAST depth (Lambda symbol definition) = start <> end
+  where start = replicate depth ' ' <> "+ λ" <> notateToken symbol +: '\n'
+        end   = foldl (<>) "" (map (showAST (depth + 1)) definition)
 
 -- Evaluation -------------------------------------------------------------------------------------
+
 -- if node contains [(...) Lambda Node (...)] then return it's position,
 findApplicationContext :: Node -> Maybe Int
 findApplicationContext (Leaf _) = Nothing
@@ -279,13 +366,14 @@ findApplicationContext (Lambda _ definition)
   where searched_lambdas = elemIndices True (map isLambda definition)
 
 
+-- a datatype that holds a context where either the alpha or beta rule can apply and the
+-- surrounding context
 data Reduction = Reduction {
-  before :: ![Node],
-  lambda :: !Node,
-  arg    :: !Node,
-  after  :: ![Node]
+  before :: ![Node], -- everything before the to be reduced lambda
+  lambda :: !Node, -- the lambda which will be reduced
+  arg    :: !Node, -- the argument of the lambda
+  after  :: ![Node] -- everything after in the array of nodes
 } deriving (Show)
-
 
 lambdaWithArg :: ([Node], Node, [Node]) -> Reduction
 lambdaWithArg (before, node, after) = Reduction{
@@ -295,12 +383,13 @@ lambdaWithArg (before, node, after) = Reduction{
   after = tail after
 }
 
-
+-- only really exists because some lines were to many characters
 splitMaybePos :: Maybe Int -> [Node] -> Maybe ([Node], Node, [Node])
 splitMaybePos maybe_lambda_pos = 
   splitAtIndex (fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos)
 
 -- Alpha Conversion -------------------------------------------------------------------------------
+
 alpha :: Map Token Token -> Node -> Node
 alpha token_map (Leaf val)
   | val `elem` keys token_map
@@ -359,7 +448,7 @@ shouldApplyAlpha (Branch stems)
     let lambda = stems !! context in
     let arg = stems !! (context + 1) in
     shouldApplyAlphaInner lambda arg
-  | otherwise = False
+  | otherwise = any shouldApplyAlpha stems
   where maybe_context = findApplicationContext Branch{stems}
 
 shouldApplyAlpha (Lambda symbol definition)
@@ -368,11 +457,13 @@ shouldApplyAlpha (Lambda symbol definition)
     let lambda = definition !! context in
     let arg = definition !! (context + 1) in
     shouldApplyAlphaInner lambda arg
-  | otherwise = False
+  | otherwise = any shouldApplyAlpha definition
   where maybe_context = findApplicationContext Lambda{symbol, definition}
+
 
 filterLeaves :: [Node] -> [Node]
 filterLeaves = filter isLeaf
+
 
 -- determines if a lambda and an argument should undergo alpha conversion. It occurs if one or more
 -- arguments are the same as any bound variables within a nested function. The outer function
@@ -384,11 +475,22 @@ shouldApplyAlphaInner (Lambda symbol definition) (Leaf val)
 shouldApplyAlphaInner (Lambda symbol definition) (Branch stems) =
   not $ Data.Set.null (arg_variables `intersection` bound_variables)
   where symbol_set = singleton symbol
-        arg_variables = Data.Set.fromList (map val $ filterLeaves stems) 
+        arg_variables = variables Branch {stems}-- Data.Set.fromList (map val $ filterLeaves stems) 
         bound_variables =
-          boundVariables Lambda {symbol = symbol, definition = definition} `difference` symbol_set
+          boundVariables Lambda {symbol, definition} `difference` symbol_set
 
-shouldApplyAlphaInner (Lambda _ _) (Lambda _ _) = False
+shouldApplyAlphaInner (Lambda symbol1 definition1) (Lambda symbol2 definition2) =
+  not $ Data.Set.null (arg_variables `intersection` bound_variables)
+  where symbol_set = singleton symbol1
+        arg_variables = variables Lambda {
+          symbol = symbol2,
+          definition = definition2
+        }-- Data.Set.fromList (map val $ filterLeaves definition2)
+        bound_variables =
+          boundVariables Lambda {
+            symbol = symbol1,
+            definition = definition1
+          } `difference` symbol_set
 
 
 alphaTokenMap (Lambda symbol definition) (Leaf val)
@@ -401,12 +503,28 @@ alphaTokenMap (Lambda symbol definition) (Branch stems)
   | not $ Data.Set.null substitution_variables =
     Just $ newVariables (length substitution_variables) substitution_variables all_variables
   | otherwise = Nothing
-  where arg_variables = Data.Set.fromList $ map val $ filterLeaves stems
+  where arg_variables = variables Branch {stems}-- Data.Set.fromList $ map val $ filterLeaves stems
         bound_variables = boundVariables Branch{stems = definition}
         all_variables = variables Branch{stems = definition}
         substitution_variables = arg_variables `intersection` bound_variables
 
-alphaTokenMap (Lambda _ _) (Lambda _ _) = Nothing
+alphaTokenMap (Lambda symbol1 definition1) (Lambda symbol2 definition2)
+  | not $ Data.Set.null substitution_variables =
+    Just $ newVariables (length substitution_variables) substitution_variables all_variables
+  | otherwise = Nothing
+  where arg_variables = variables Lambda{
+          symbol = symbol2,
+          definition = definition2
+        }--Data.Set.fromList $ map val $ filterLeaves definition2
+        bound_variables = boundVariables Lambda {
+          symbol = symbol1,
+          definition = definition1
+        }
+        all_variables = variables Lambda{
+          symbol = symbol1,
+          definition = definition1
+        }
+        substitution_variables = arg_variables `intersection` bound_variables
 
 
 alphaReductionToBranch :: Reduction -> Node
@@ -472,6 +590,7 @@ applyAlpha (Lambda symbol definition)
   where maybe_context = findApplicationContext Lambda{symbol, definition}
 
 -- Beta Reduction ---------------------------------------------------------------------------------
+
 -- given a lambda expression and a symbol, all matching symbols within the expression are replaced
 -- with that value. beta _ (Branch stems) supports currying by evaluating the first node of a
 -- branch node if there exist multiple stems in the branch
@@ -526,46 +645,76 @@ applyBeta :: Node -> Node
 applyBeta (Leaf val) = Leaf{val} -- applying beta reduction does nothing to a free varible
 
 applyBeta (Branch stems)
+  | not $ Prelude.null child_reduction_positions =
+    let child_reduction_pos = head child_reduction_positions in
+    let maybe_split = splitAtIndex child_reduction_pos stems in
+    let (hd, node, tl) = fromMaybe (error $ red impossibleFromMaybe) maybe_split in
+    Branch {stems = hd ++ [applyBeta node] ++ tl}
+
   | isJust maybe_lambda_pos =
     let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos stems in
     let beta_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
     betaReductionToBranch beta_reduction
-  | otherwise = Branch{stems=map applyBeta stems}
-  where maybe_lambda_pos = findApplicationContext Branch{stems}
+
+  | otherwise = Branch{stems}
+  where child_reduction_positions = findIndices shouldApplyBeta stems
+        maybe_lambda_pos = findApplicationContext Branch{stems}
 
 applyBeta (Lambda symbol definition)
+  | not $ Prelude.null child_reduction_positions =
+    let child_reduction_pos = head child_reduction_positions in
+    let maybe_split = splitAtIndex child_reduction_pos definition in
+    let (hd, node, tl) = fromMaybe (error $ red impossibleFromMaybe) maybe_split in
+    Lambda {symbol, definition = hd ++ [applyBeta node] ++ tl}
+
   | isJust maybe_lambda_pos =
     let lambda_pos = fromMaybe (error $ red impossibleFromMaybe) maybe_lambda_pos in
     let split = splitMaybePos maybe_lambda_pos definition in
     let beta_reduction = lambdaWithArg (fromMaybe (error $ red applySplitFailure) split) in
     betaReductionToLambda symbol beta_reduction
-  | otherwise = Lambda{symbol, definition = map applyBeta definition}
-  where maybe_lambda_pos = findApplicationContext Lambda {symbol, definition}
 
--- Application ------------------------------------------------------------------------------------
-eval :: String -> IO()
-eval string = putStrLn $ notation $ evalRecur 0 $ parse $ tokenise string
+  | otherwise = Lambda{symbol, definition}
+  where child_reduction_positions = findIndices shouldApplyBeta definition
+        maybe_lambda_pos = findApplicationContext Lambda {symbol, definition}
 
-evalRecur :: Int -> Node -> Node
-evalRecur iteration node
+-- Evaluation -------------------------------------------------------------------------------------
+
+evalRecur :: TraceType -> Int -> Node -> Node
+evalRecur NoTrace _ _ | trace "" False = undefined
+
+evalRecur Steps iteration node
   | trace (lyellow (show iteration) <> space <> symbol <> " " <> notation node) False = undefined
   where symbol | shouldApplyAlpha node = lred "α"
-               | shouldApplyBeta node = lcyan "β"
+               | shouldApplyBeta  node = lcyan "β"
                | otherwise = " "
-        space =  replicate (4 - floor (logBase 10 (fromIntegral iteration))) ' '
+        space =  replicate (6 - length (show iteration)) ' '
 
-evalRecur iteration node
+evalRecur AST iteration node
+  | trace ((show iteration +: '\n') <> showAST 0 node) False = undefined
+
+evalRecur trace_type iteration node
   | iteration > 1000 = error $ red infinateRecursion
-  | to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyAlpha node
-  | to_eval_beta && not to_eval_alpha = evalRecur (iteration + 1) $ simplifyTree $ applyBeta node
+  | to_eval_alpha = newEvalRecur $ applyAlpha node
+  | to_eval_beta && not to_eval_alpha = newEvalRecur $ regulariseTree $ applyBeta node
   | otherwise = node
-  
-  where to_eval_alpha = shouldApplyAlpha node
+  where newEvalRecur = evalRecur trace_type (iteration + 1) 
+        to_eval_alpha = shouldApplyAlpha node
         to_eval_beta  = shouldApplyBeta node
 
+
+eval :: TraceType -> String -> IO()
+eval trace_type = putStrLn . notation . evalRecur trace_type 0 . parse . tokenise . preprocessInput
+
+-- Prompt -----------------------------------------------------------------------------------------
+
 renotate :: String -> String
-renotate string = notation $ parse $ tokenise string
+renotate = notation . parse . tokenise
+
+data TraceType =
+    NoTrace
+  | AST
+  | Steps
 
 -- Main -------------------------------------------------------------------------------------------
 main :: IO()
@@ -573,5 +722,5 @@ main = do
   hSetBuffering stdout NoBuffering
   forever $ do
     putStr ">> "
-    input <- getLine
-    eval input
+    input <- getLine 
+    eval Steps input
