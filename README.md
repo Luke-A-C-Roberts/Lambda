@@ -1,6 +1,7 @@
 # Lambda interpreter written in haskell
 
-To run make sure you have the Glasgow Haskell Compiler `ghc` is installed version >= 9.6.4. The best way to acquire GHC is via `ghcup` link: https://www.haskell.org/ghcup/install/. Once installed, navigate to the cloned folder and execute the build script with `./build`. Then run with `./lambda`.
+## Compile
+To run make sure you have the Glasgow Haskell Compiler `ghc` is installed as well as `cabal`. To compile, execute `cabal build` on your command line of choice and then `cabal run` to run the program.
 
 ## Features
 This lambda interpreter supports:
