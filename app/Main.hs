@@ -4,6 +4,7 @@ import Lambda
 
 import Control.Monad (forever)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
+
 -- Main -------------------------------------------------------------------------------------------
 main :: IO()
 main = do
