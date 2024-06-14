@@ -5,6 +5,10 @@ module Lambda where
 import Prelude hiding (lookup)
 
 import Data.Maybe (isJust, fromMaybe)
+<<<<<<< HEAD:app/Lambda.hs
+=======
+import Data.Typeable (typeOf)
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 import Data.Function (on)
 
 import Data.List (elemIndices, sort, findIndices, intersperse, groupBy)
@@ -12,6 +16,11 @@ import Data.Map (Map, keys, lookup, fromList)
 import Data.Set (Set, difference, fromList, empty, intersection, member, null, singleton, toList,
   union, unions)
 
+<<<<<<< HEAD:app/Lambda.hs
+=======
+import Control.Monad (forever)
+import Control.Exception (SomeException, catch)
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 import Debug.Trace (trace)
 
 -- Utils ------------------------------------------------------------------------------------------
@@ -69,13 +78,18 @@ badTokenMessage :: Char -> String
 badTokenMessage char = "Invalid Token: " <> [char]
 
 bracesMismatch1, bracesMismatch2, impossibleFromMaybe, applySplitFailure, alphaOutOfSymbols,
+<<<<<<< HEAD:app/Lambda.hs
   infinateRecursion, unknownTokenError :: String
+=======
+  infinateRecursion :: String
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 bracesMismatch1     = "Braces do not match (not all opened braces were closed)"
 bracesMismatch2     = "Braces do not match (there is a closed brace before an opened one)"
 impossibleFromMaybe = "This error is impossible because there is a isJust clause before fromMaybe"
 applySplitFailure   = "`splitAtIndex` performed on branch or lambda stems failed"
 alphaOutOfSymbols   = "all symbols were expended when trying to complete alpha conversion"
 infinateRecursion   = "It is possible that the function being run is going on infinately"
+<<<<<<< HEAD:app/Lambda.hs
 unknownTokenError   = "A token of unknown type has been traversed during display"
 
 alphaInnerError, tokenMapError, betaError :: Node -> String
@@ -89,6 +103,9 @@ betaError node = "When trying to apply `beta` the first argument expected `Lambd
                      <> show node <> " instead"
 
 
+=======
+
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 invalidArg :: String -> String
 invalidArg arg = "Invalid argument " <> arg <> ". use -h for help message" 
 
@@ -146,9 +163,15 @@ filterNonEmpty = filter (not . isEmptyToken)
 
 -- keeps track of how many braces are opened and closed
 braceReduce :: Int -> Token -> Int
+<<<<<<< HEAD:app/Lambda.hs
 braceReduce nestedness _token
   | _token == LBrace = nestedness + 1
   | _token == RBrace = nestedness - 1
+=======
+braceReduce nestedness token
+  | token == LBrace = nestedness + 1
+  | token == RBrace = nestedness - 1
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
   | otherwise = nestedness
 
 
@@ -273,21 +296,32 @@ makeTreeLambdas (Lambda symbol definition) =
 
 
 -- inforces left associtivity i.e. abc -> (ab)c
+<<<<<<< HEAD:app/Lambda.hs
 associativitySize :: Int
 associativitySize = 3
 
+=======
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 makeLeftAssociative :: Node -> Node
 makeLeftAssociative (Leaf val) = Leaf{val}
 
 makeLeftAssociative (Branch stems)
+<<<<<<< HEAD:app/Lambda.hs
   | length stems < associativitySize = Branch{stems = map makeLeftAssociative stems}
+=======
+  | length stems < 3 = Branch{stems = map makeLeftAssociative stems}
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
   | otherwise = Branch{stems = [
       makeLeftAssociative $ Branch{stems = init stems},
       makeLeftAssociative $ last stems
     ]}
 
 makeLeftAssociative (Lambda symbol definition)
+<<<<<<< HEAD:app/Lambda.hs
   | length definition < associativitySize = Lambda{symbol, definition = map makeLeftAssociative definition}
+=======
+  | length definition < 3 = Lambda{symbol, definition = map makeLeftAssociative definition}
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
   | otherwise = Lambda{symbol, definition = [
       makeLeftAssociative $ Branch{stems = init definition},
       makeLeftAssociative $ last definition
@@ -317,6 +351,7 @@ parse tokens = regulariseTree $ makeTreeLambdas $ makeTree tokens
 
 notateToken :: Token -> String
 notateToken (Letter c) = c:""
+<<<<<<< HEAD:app/Lambda.hs
 
 notateToken _token
   | _token == Sign   = "λ"
@@ -325,6 +360,13 @@ notateToken _token
   | _token == RBrace = ")"
 
 notateToken _ = error $ red unknownTokenError 
+=======
+notateToken token
+  | token == Sign   = "λ"
+  | token == Dot    = "."
+  | token == LBrace = "("
+  | token == RBrace = ")"
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 
 
 braceWrap :: String -> String
@@ -385,9 +427,15 @@ findApplicationContext (Lambda _ definition)
 -- surrounding context
 data Reduction = Reduction {
   before :: ![Node], -- everything before the to be reduced lambda
+<<<<<<< HEAD:app/Lambda.hs
   lambda :: !Node,   -- the lambda which will be reduced
   arg    :: !Node,   -- the argument of the lambda
   after  :: ![Node]  -- everything after in the array of nodes
+=======
+  lambda :: !Node, -- the lambda which will be reduced
+  arg    :: !Node, -- the argument of the lambda
+  after  :: ![Node] -- everything after in the array of nodes
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
 } deriving (Show)
 
 lambdaWithArg :: ([Node], Node, [Node]) -> Reduction
@@ -490,7 +538,11 @@ shouldApplyAlphaInner (Lambda _ definition) (Leaf val)
 shouldApplyAlphaInner (Lambda symbol definition) (Branch stems) =
   not $ Data.Set.null (arg_variables `intersection` bound_variables)
   where symbol_set = singleton symbol
+<<<<<<< HEAD:app/Lambda.hs
         arg_variables = variables Branch {stems}
+=======
+        arg_variables = variables Branch {stems}-- Data.Set.fromList (map val $ filterLeaves stems) 
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
         bound_variables =
           boundVariables Lambda {symbol, definition} `difference` symbol_set
 
@@ -500,7 +552,11 @@ shouldApplyAlphaInner (Lambda symbol1 definition1) (Lambda symbol2 definition2) 
         arg_variables = variables Lambda {
           symbol = symbol2,
           definition = definition2
+<<<<<<< HEAD:app/Lambda.hs
         }
+=======
+        }-- Data.Set.fromList (map val $ filterLeaves definition2)
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
         bound_variables =
           boundVariables Lambda {
             symbol = symbol1,
@@ -718,6 +774,7 @@ evalRecur trace_type iteration node
         to_eval_alpha = shouldApplyAlpha node
         to_eval_beta  = shouldApplyBeta node
 
+<<<<<<< HEAD:app/Lambda.hs
 
 eval :: TraceType -> String -> IO()
 eval trace_type = putStrLn . notation . evalRecur trace_type 0 . parse . tokenise . preprocessInput
@@ -731,3 +788,27 @@ data TraceType =
     NoTrace
   | AST
   | Steps
+=======
+
+eval :: TraceType -> String -> IO()
+eval trace_type = putStrLn . notation . evalRecur trace_type 0 . parse . tokenise . preprocessInput
+
+-- Prompt -----------------------------------------------------------------------------------------
+
+renotate :: String -> String
+renotate = notation . parse . tokenise
+
+data TraceType =
+    NoTrace
+  | AST
+  | Steps
+
+-- Main -------------------------------------------------------------------------------------------
+main :: IO()
+main = do
+  hSetBuffering stdout NoBuffering
+  forever $ do
+    putStr ">> "
+    input <- getLine 
+    eval Steps input
+>>>>>>> 1c33929b57fb94fcc8fbcaf39e4c93ed5db3df24:lambda.hs
