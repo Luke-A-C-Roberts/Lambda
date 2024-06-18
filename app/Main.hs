@@ -4,6 +4,7 @@ import Lambda
 
 import Control.Monad (forever)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
+
 -- Main -------------------------------------------------------------------------------------------
 main :: IO()
 main = do
@@ -11,4 +12,4 @@ main = do
   forever $ do
     putStr ">> "
     input <- getLine 
-    eval Steps input
+    putStrLn $ eval TraceSteps input
