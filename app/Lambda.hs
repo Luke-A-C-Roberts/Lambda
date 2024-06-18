@@ -20,10 +20,10 @@ color :: Int -> String -> String
 color val string = "\x1b[" <> show val <> "m" <> string <> "\x1b[0m"
 
 red, lred, lyellow, lcyan :: String -> String
-red = color 31
-lred = color 91
+red     = color 31
+lred    = color 91
 lyellow = color 93
-lcyan = color 96
+lcyan   = color 96
 
 
 validVariableChars, validLambdaChars :: [Char]
@@ -694,21 +694,26 @@ applyBeta (Lambda symbol definition)
 
 -- Evaluation -------------------------------------------------------------------------------------
 
+maxIteration, tabLength :: Int
+maxIteration = 1000
+tabLength = 6
+
 evalRecur :: TraceType -> Int -> Node -> Node
 evalRecur NoTrace _ _ | trace "" False = undefined
 
-evalRecur Steps iteration node
+evalRecur TraceSteps iteration node
   | trace (lyellow (show iteration) <> space <> symbol <> " " <> notation node) False = undefined
   where symbol | shouldApplyAlpha node = lred "α"
                | shouldApplyBeta  node = lcyan "β"
                | otherwise = " "
-        space =  replicate (6 - length (show iteration)) ' '
+        space =  replicate (tabLength - length (show iteration)) ' '
 
-evalRecur AST iteration node
+evalRecur TraceAST iteration node
   | trace ((show iteration +: '\n') <> showAST 0 node) False = undefined
 
+
 evalRecur trace_type iteration node
-  | iteration > 1000 = error $ red infinateRecursion
+  | iteration > maxIteration = error $ red infinateRecursion
   | to_eval_alpha = newEvalRecur $ applyAlpha node
   | to_eval_beta && not to_eval_alpha = newEvalRecur $ regulariseTree $ applyBeta node
   | otherwise = node
@@ -716,8 +721,8 @@ evalRecur trace_type iteration node
         to_eval_alpha = shouldApplyAlpha node
         to_eval_beta  = shouldApplyBeta node
 
-eval :: TraceType -> String -> IO()
-eval trace_type = putStrLn . notation . evalRecur trace_type 0 . parse . tokenise . preprocessInput
+eval :: TraceType -> String -> String
+eval trace_type = notation . evalRecur trace_type 0 . parse . tokenise . preprocessInput
 
 -- Prompt -----------------------------------------------------------------------------------------
 
@@ -726,5 +731,5 @@ renotate = notation . parse . tokenise
 
 data TraceType =
     NoTrace
-  | AST
-  | Steps
+  | TraceAST
+  | TraceSteps
