@@ -5,7 +5,7 @@ To run make sure you have the Glasgow Haskell Compiler `ghc` is installed as wel
 
 ## Features
 This lambda interpreter supports:
-  - UTF-8 characters (both `λ` and `ł` work as the lambda sigil)
+  - UTF-8 characters (`\`, `λ` and `ł` work as the lambda sigils)
   - nested (curried) lambda functions, eg. `λx.λy.xy`, which do not require braces on input.
   - free variables in lambda function, eg. `λx.xy`
   - beta reduction of single variables, eg. `(λx.x)y → y`
