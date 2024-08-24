@@ -13,6 +13,7 @@ This lambda interpreter supports:
   - beta reduction of other lambdas, eg. `(λx.x)(λy.y) → (λy.y)`
   - alpha conversion of single nested bound variables, eg. `(λf.(λx.f(fx)))x` → `(λf.(λa.f(fa)))x`
   - alpha conversion of multiple nested bound variables, eg. `(λa.(λb.(λc.abc)))(bc) → (λa.(λd.(λe.ade)))(bc)`
+  - Parameter sugaring in input, e.g λxy.xy → λx.λy.xy
 
 ## Demo
 ![demo](https://github.com/Luke-A-C-Roberts/Lambda/blob/master/demo.png?raw=true)
